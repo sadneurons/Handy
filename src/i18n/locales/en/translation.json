@@ -470,7 +470,27 @@
       "retranscribe": "Re-transcribe",
       "retranscribeError": "Failed to re-transcribe. Please try again.",
       "transcribing": "Transcribing...",
-      "transcriptionFailed": "Transcription failed. You can re-transcribe using the retry icon."
+      "transcriptionFailed": "Transcription failed. You can re-transcribe using the retry icon.",
+      "transcribeFiles": {
+        "title": "Transcribe Files",
+        "description": "Drop audio files here, or choose them. Transcripts are saved beside each file as .raw.txt and, with post-processing, .cleaned.txt.",
+        "choose": "Choose files…",
+        "postProcess": "Post-process with AI",
+        "postProcessDescription": "Also run the selected post-processing prompt and save a second, cleaned transcript. The raw transcript is always saved.",
+        "progress": "{{current}} of {{total}}: {{file}} — {{stage}}",
+        "stages": {
+          "decoding": "decoding",
+          "transcribing": "transcribing",
+          "post_processing": "post-processing",
+          "saving": "saving",
+          "done": "done",
+          "failed": "failed"
+        },
+        "savedRaw": "saved raw transcript",
+        "savedBoth": "saved raw and cleaned transcripts",
+        "fallback": "(folder not writable, saved to Documents/Handy Transcripts)",
+        "showInFolder": "Show in folder"
+      }
     },
     "debug": {
       "title": "Debug",
