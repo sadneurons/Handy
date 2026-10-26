@@ -58,6 +58,9 @@ const RecordingOverlay: React.FC = () => {
   // Overlay placement (top vs bottom of the screen). The Live panel grows downward
   // from a top overlay (oldest line under the pill) and upward from a bottom one.
   const [position, setPosition] = useState<"top" | "bottom">("bottom");
+  // Name of the active replacement dictionary, re-read every time the overlay
+  // shows so a switch made while hidden (tray, CLI) is reflected at a glance.
+  const [activeDictionary, setActiveDictionary] = useState<string | null>(null);
   // True once live text overflows the cap. A top overlay fades its top edge only
   // while overflowing, so the resting first line stays crisp flush under the pill.
   const [overflowing, setOverflowing] = useState(false);
@@ -92,6 +95,12 @@ const RecordingOverlay: React.FC = () => {
           if (settings.status === "ok") {
             setPosition(
               settings.data.overlay_position === "top" ? "top" : "bottom",
+            );
+            const active = settings.data.active_dictionary_id;
+            setActiveDictionary(
+              (settings.data.replacement_dictionaries ?? []).find(
+                (d) => d.id === active,
+              )?.name ?? null,
             );
           }
         } catch {
@@ -267,6 +276,11 @@ const RecordingOverlay: React.FC = () => {
       </div>
       {waveform}
       <div className="sbase-r">
+        {activeDictionary && (
+          <span className="sdict" title={activeDictionary}>
+            {activeDictionary}
+          </span>
+        )}
         {showTimer && <span className="stimer">{fmtTime(elapsed)}</span>}
         {showCancel && cancelBtn}
       </div>

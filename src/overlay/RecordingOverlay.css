@@ -315,6 +315,16 @@
   gap: 10px;
   justify-self: end;
 }
+/* Active replacement dictionary, shown so the user can glance before speaking. */
+.sdict {
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.6;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sdot {
   width: 7px;
   height: 7px;
