@@ -316,6 +316,19 @@ fn initialize_core_logic(app_handle: &AppHandle) {
             "quit" => {
                 app.exit(0);
             }
+            id if id.starts_with("dictionary_select:") => {
+                let raw = id.strip_prefix("dictionary_select:").unwrap_or_default();
+                let target = (raw != "none").then(|| raw.to_string());
+                if settings::get_settings(app).active_dictionary_id == target {
+                    // Re-selecting the checked item unchecks it natively; rebuild to restore.
+                    tray::update_tray_menu(app);
+                    return;
+                }
+                if let Err(e) = shortcut::set_active_dictionary_id(app, target) {
+                    log::error!("Failed to switch dictionary via tray: {}", e);
+                    tray::update_tray_menu(app);
+                }
+            }
             id if id.starts_with("model_select:") => {
                 let model_id = id.strip_prefix("model_select:").unwrap().to_string();
                 let current_model = settings::get_settings(app).selected_model;

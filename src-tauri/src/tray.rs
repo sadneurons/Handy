@@ -63,6 +63,38 @@ struct MenuInputs {
     downloaded_models: Vec<(String, String)>,
     locale: String,
     update_checks_enabled: bool,
+    /// `(id, name)` of replacement dictionaries, sorted by name.
+    dictionaries: Vec<(String, String)>,
+    /// Id of the active replacement dictionary, if any.
+    active_dictionary: Option<String>,
+}
+
+/// Rows of the dictionary submenu as `(item id, label, checked)`: a "None"
+/// entry first, then every dictionary.
+fn dictionary_menu_items(inputs: &MenuInputs, none_label: &str) -> Vec<(String, String, bool)> {
+    let mut items = vec![(
+        "dictionary_select:none".to_string(),
+        none_label.to_string(),
+        inputs.active_dictionary.is_none(),
+    )];
+    items.extend(inputs.dictionaries.iter().map(|(id, name)| {
+        (
+            format!("dictionary_select:{id}"),
+            name.clone(),
+            inputs.active_dictionary.as_deref() == Some(id.as_str()),
+        )
+    }));
+    items
+}
+
+/// Submenu label: the active dictionary's name, else the generic label.
+fn dictionary_submenu_label(inputs: &MenuInputs, fallback: &str) -> String {
+    inputs
+        .active_dictionary
+        .as_deref()
+        .and_then(|active| inputs.dictionaries.iter().find(|(id, _)| id == active))
+        .map(|(_, name)| name.clone())
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 /// Complete description of what the tray should look like.
@@ -324,6 +356,13 @@ fn compute_desired(app: &AppHandle, icon_state: TrayIconState) -> TrayDesired {
         .collect();
     downloaded_models.sort_by(|a, b| a.1.cmp(&b.1));
 
+    let mut dictionaries: Vec<(String, String)> = settings
+        .replacement_dictionaries
+        .iter()
+        .map(|d| (d.id.clone(), d.name.clone()))
+        .collect();
+    dictionaries.sort_by(|a, b| a.1.cmp(&b.1));
+
     TrayDesired {
         icon_path: get_icon_path(theme, icon_state, warning),
         menu: MenuInputs {
@@ -334,6 +373,8 @@ fn compute_desired(app: &AppHandle, icon_state: TrayIconState) -> TrayDesired {
             downloaded_models,
             locale: settings.app_language,
             update_checks_enabled: settings.update_checks_enabled,
+            dictionaries,
+            active_dictionary: settings.active_dictionary_id,
         },
     }
 }
@@ -554,6 +595,17 @@ fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri
             None::<&str>,
         )?;
 
+        let dictionary_submenu = Submenu::with_id(
+            app,
+            "dictionary_submenu",
+            dictionary_submenu_label(inputs, &strings.dictionary),
+            true,
+        )?;
+        for (item_id, label, checked) in dictionary_menu_items(inputs, &strings.dictionary_none) {
+            let item = CheckMenuItem::with_id(app, &item_id, &label, true, checked, None::<&str>)?;
+            dictionary_submenu.append(&item)?;
+        }
+
         Menu::with_items(
             app,
             &[
@@ -563,6 +615,7 @@ fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri
                 &separator()?,
                 &model_submenu,
                 &unload_model_i,
+                &dictionary_submenu,
                 &separator()?,
                 &settings_i,
                 &check_updates_i,
@@ -668,7 +721,10 @@ pub fn copy_last_transcript(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{last_transcript_text, load_tray_icon, MenuInputs, TrayDesired, TrayIconState};
+    use super::{
+        dictionary_menu_items, dictionary_submenu_label, last_transcript_text, load_tray_icon,
+        MenuInputs, TrayDesired, TrayIconState,
+    };
     use crate::managers::history::HistoryEntry;
 
     fn build_entry(transcription: &str, post_processed: Option<&str>) -> HistoryEntry {
@@ -694,7 +750,44 @@ mod tests {
             downloaded_models: vec![("small".to_string(), "Small".to_string())],
             locale: "en".to_string(),
             update_checks_enabled: true,
+            dictionaries: vec![],
+            active_dictionary: None,
         }
+    }
+
+    #[test]
+    fn dictionary_submenu_lists_entries_with_active_checked() {
+        let mut i = inputs(false);
+        i.dictionaries = vec![
+            ("c".to_string(), "Clinical".to_string()),
+            ("s".to_string(), "Science".to_string()),
+        ];
+        i.active_dictionary = Some("s".to_string());
+        assert_eq!(
+            dictionary_menu_items(&i, "None"),
+            vec![
+                (
+                    "dictionary_select:none".to_string(),
+                    "None".to_string(),
+                    false
+                ),
+                (
+                    "dictionary_select:c".to_string(),
+                    "Clinical".to_string(),
+                    false
+                ),
+                (
+                    "dictionary_select:s".to_string(),
+                    "Science".to_string(),
+                    true
+                ),
+            ]
+        );
+        assert_eq!(dictionary_submenu_label(&i, "Dictionary"), "Science");
+
+        i.active_dictionary = None;
+        assert_eq!(dictionary_menu_items(&i, "None")[0].2, true);
+        assert_eq!(dictionary_submenu_label(&i, "Dictionary"), "Dictionary");
     }
 
     #[test]
