@@ -109,10 +109,24 @@ pub enum PostProcessApiFormat {
 /// A deterministic find-and-replace rule applied to the final transcript:
 /// an exact, case-insensitive substitution of `from` with `to`, unlike the
 /// fuzzy `custom_words`.
-#[derive(Serialize, Deserialize, Debug, Clone, Type)]
+#[derive(Serialize, Deserialize, Debug, Clone, Type, PartialEq)]
 pub struct WordReplacement {
     pub from: String,
     pub to: String,
+}
+
+/// A named set of [`WordReplacement`] rules. Exactly one dictionary (or
+/// none) is active at a time; see [`AppSettings::active_dictionary_id`].
+#[derive(Serialize, Deserialize, Debug, Clone, Type, PartialEq)]
+pub struct ReplacementDictionary {
+    pub id: String,
+    pub name: String,
+    pub entries: Vec<WordReplacement>,
+}
+
+/// Fresh, stable id for a new dictionary.
+pub fn new_dictionary_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
@@ -450,8 +464,16 @@ pub struct AppSettings {
     pub log_level: LogLevel,
     #[serde(default)]
     pub custom_words: Vec<String>,
+    /// Legacy flat list. Read once by the migration that turns it into a
+    /// "Clinical" dictionary; always written back empty afterwards.
     #[serde(default)]
+    #[deprecated(note = "use replacement_dictionaries / active_dictionary_id")]
     pub word_replacements: Vec<WordReplacement>,
+    #[serde(default)]
+    pub replacement_dictionaries: Vec<ReplacementDictionary>,
+    /// `None` means no replacements are applied.
+    #[serde(default)]
+    pub active_dictionary_id: Option<String>,
     #[serde(default)]
     pub model_unload_timeout: ModelUnloadTimeout,
     #[serde(default = "default_word_correction_threshold")]
@@ -995,7 +1017,10 @@ pub fn get_default_settings() -> AppSettings {
         debug_mode: false,
         log_level: default_log_level(),
         custom_words: Vec::new(),
+        #[allow(deprecated)]
         word_replacements: Vec::new(),
+        replacement_dictionaries: Vec::new(),
+        active_dictionary_id: None,
         model_unload_timeout: ModelUnloadTimeout::default(),
         word_correction_threshold: default_word_correction_threshold(),
         history_limit: default_history_limit(),
@@ -1044,6 +1069,35 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    /// The dictionary `active_dictionary_id` names, if it still exists.
+    pub fn active_dictionary(&self) -> Option<&ReplacementDictionary> {
+        self.active_dictionary_id
+            .as_deref()
+            .and_then(|id| self.dictionary_by_id(id))
+    }
+
+    /// Replacement rules of the active dictionary; empty when none is active
+    /// or the active id dangles.
+    pub fn active_replacements(&self) -> &[WordReplacement] {
+        self.active_dictionary()
+            .map(|d| d.entries.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn dictionary_by_id(&self, id: &str) -> Option<&ReplacementDictionary> {
+        self.replacement_dictionaries.iter().find(|d| d.id == id)
+    }
+
+    /// Resolves a CLI-style reference: exact id first, then the first
+    /// dictionary whose name matches case-insensitively.
+    pub fn resolve_dictionary(&self, name_or_id: &str) -> Option<&ReplacementDictionary> {
+        self.dictionary_by_id(name_or_id).or_else(|| {
+            self.replacement_dictionaries
+                .iter()
+                .find(|d| d.name.eq_ignore_ascii_case(name_or_id))
+        })
+    }
+
     pub fn active_post_process_provider(&self) -> Option<&PostProcessProvider> {
         self.post_process_providers
             .iter()
@@ -1200,6 +1254,23 @@ fn apply_settings_migrations(
         }
     }
 
+    // One-time replacement-dictionary migration: the flat `word_replacements`
+    // list becomes a single "Clinical" dictionary (the original owner's use
+    // case) and is made active, so existing rules keep firing unchanged.
+    #[allow(deprecated)]
+    if settings.replacement_dictionaries.is_empty() && !settings.word_replacements.is_empty() {
+        let id = new_dictionary_id();
+        settings
+            .replacement_dictionaries
+            .push(ReplacementDictionary {
+                id: id.clone(),
+                name: "Clinical".to_string(),
+                entries: std::mem::take(&mut settings.word_replacements),
+            });
+        settings.active_dictionary_id = Some(id);
+        updated = true;
+    }
+
     // One-time Chinese script migration: the script used to be chosen through
     // `zh-Hans`/`zh-Hant` language intents. Split those into the recognition
     // language and the script setting; every other upgrading user keeps the
@@ -1342,6 +1413,85 @@ mod tests {
 
     fn default_settings_json() -> serde_json::Value {
         serde_json::to_value(get_default_settings()).unwrap()
+    }
+
+    fn dict(id: &str, name: &str, entries: &[(&str, &str)]) -> ReplacementDictionary {
+        ReplacementDictionary {
+            id: id.to_string(),
+            name: name.to_string(),
+            entries: entries
+                .iter()
+                .map(|(f, t)| WordReplacement {
+                    from: f.to_string(),
+                    to: t.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn migrates_legacy_replacements_into_clinical_dictionary() {
+        let stored = serde_json::json!({ "word_replacements": [{"from":"a","to":"b"}] });
+        let mut s: AppSettings = serde_json::from_value(stored.clone()).unwrap();
+        assert!(apply_settings_migrations(&mut s, &stored));
+        assert_eq!(s.replacement_dictionaries.len(), 1);
+        assert_eq!(s.replacement_dictionaries[0].name, "Clinical");
+        assert_eq!(
+            s.replacement_dictionaries[0].entries,
+            vec![WordReplacement {
+                from: "a".into(),
+                to: "b".into()
+            }]
+        );
+        assert_eq!(
+            s.active_dictionary_id.as_deref(),
+            Some(s.replacement_dictionaries[0].id.as_str())
+        );
+        assert!(s.word_replacements.is_empty());
+    }
+
+    #[test]
+    fn empty_legacy_list_creates_no_dictionary() {
+        let stored = serde_json::json!({ "word_replacements": [] });
+        let mut s: AppSettings = serde_json::from_value(stored.clone()).unwrap();
+        apply_settings_migrations(&mut s, &stored);
+        assert!(s.replacement_dictionaries.is_empty());
+        assert_eq!(s.active_dictionary_id, None);
+    }
+
+    #[test]
+    fn migration_is_idempotent_when_dictionaries_exist() {
+        let stored = serde_json::json!({
+            "word_replacements": [{"from":"x","to":"y"}],
+            "replacement_dictionaries": [{"id":"d1","name":"Mine","entries":[]}],
+            "active_dictionary_id": "d1"
+        });
+        let mut s: AppSettings = serde_json::from_value(stored.clone()).unwrap();
+        apply_settings_migrations(&mut s, &stored);
+        assert_eq!(s.replacement_dictionaries, vec![dict("d1", "Mine", &[])]);
+        assert_eq!(s.active_dictionary_id.as_deref(), Some("d1"));
+    }
+
+    #[test]
+    fn active_replacements_is_empty_when_active_id_dangles() {
+        let mut s = get_default_settings();
+        s.replacement_dictionaries = vec![dict("d1", "Mine", &[("a", "b")])];
+        s.active_dictionary_id = Some("gone".into());
+        assert!(s.active_replacements().is_empty());
+        assert!(s.active_dictionary().is_none());
+    }
+
+    #[test]
+    fn resolve_dictionary_prefers_id_then_case_insensitive_name() {
+        let mut s = get_default_settings();
+        s.replacement_dictionaries = vec![dict("x", "Creative", &[]), dict("y", "creative", &[])];
+        assert_eq!(s.resolve_dictionary("y").map(|d| d.id.as_str()), Some("y"));
+        assert_eq!(
+            s.resolve_dictionary("CREATIVE").map(|d| d.id.as_str()),
+            Some("x")
+        );
+        assert!(s.resolve_dictionary("nope").is_none());
     }
 
     /// Every field must survive a partial store: a missing key must never fail
