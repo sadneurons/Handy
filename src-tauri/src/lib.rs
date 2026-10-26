@@ -572,6 +572,24 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
     let load_ms = load_start.elapsed().as_millis() as u64;
     let bound_backend = tm.current_backend();
 
+    // --dictionary applies to this run only; an unknown name warns and
+    // falls back to the persisted active dictionary.
+    let dictionary = match &args.dictionary {
+        Some(value) => match get_settings(app).resolve_dictionary(value) {
+            Some(d) => {
+                crate::managers::transcription::DictionarySelection::Dictionary(d.id.clone())
+            }
+            None => {
+                eprintln!(
+                    "warning: no replacement dictionary named '{}'; using the active one",
+                    value
+                );
+                crate::managers::transcription::DictionarySelection::Global
+            }
+        },
+        None => crate::managers::transcription::DictionarySelection::Global,
+    };
+
     let runs = args.repeat.unwrap_or(1).max(1);
     let mut times_ms: Vec<u64> = Vec::new();
     let mut text = String::new();
@@ -586,10 +604,7 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
             }
         }
         let t = Instant::now();
-        match tm.transcribe(
-            samples.clone(),
-            crate::managers::transcription::DictionarySelection::Global,
-        ) {
+        match tm.transcribe(samples.clone(), dictionary.clone()) {
             Ok(out) => text = out,
             Err(e) => {
                 eprintln!("error: transcribe failed: {}", e);
@@ -876,12 +891,20 @@ pub fn run(cli_args: CliArgs) {
     // instance instead.
     if !headless_mode {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // --dictionary is applied before any recording flag so one
+            // keybinding can switch context and start listening.
+            let dictionary = signal_handle::dictionary_arg(&args);
+            if let Some(value) = &dictionary {
+                signal_handle::apply_dictionary_arg(app, value);
+            }
             if args.iter().any(|a| a == "--toggle-transcription") {
                 signal_handle::send_transcription_input(app, "transcribe", "CLI");
             } else if args.iter().any(|a| a == "--toggle-post-process") {
                 signal_handle::send_transcription_input(app, "transcribe_with_post_process", "CLI");
             } else if args.iter().any(|a| a == "--cancel") {
                 crate::utils::cancel_current_operation(app);
+            } else if dictionary.is_some() {
+                // A pure dictionary switch is a remote-control call, not a relaunch.
             } else {
                 // A second process was launched without remote-control flags
                 // (e.g. the binary run from a shell). On macOS, relaunching the

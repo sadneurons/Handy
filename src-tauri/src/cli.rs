@@ -28,6 +28,12 @@ pub struct CliArgs {
     #[arg(long)]
     pub debug: bool,
 
+    /// Switch the active replacement dictionary by name or id. Sent to the
+    /// running instance (combines with --toggle-transcription, applied
+    /// first); with --transcribe-file it applies to that run only.
+    #[arg(long, value_name = "NAME_OR_ID")]
+    pub dictionary: Option<String>,
+
     /// Transcribe this WAV (16 kHz mono) headlessly and exit. Runs the same
     /// batch transcription path as the app — no mic, no silence removal, no
     /// download (the model must already be installed). Long audio is still
