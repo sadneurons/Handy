@@ -1,7 +1,7 @@
 use crate::audio_toolkit::chunking;
 use crate::audio_toolkit::{
-    apply_custom_words, apply_word_replacements, detect_output_language, normalize_transcription_output,
-    remove_filler_words, OutputLanguageEvidence,
+    apply_custom_words, apply_word_replacements, detect_output_language,
+    normalize_transcription_output, remove_filler_words, OutputLanguageEvidence,
 };
 use crate::chinese_script::{convert_chinese_script, ChineseVariety};
 use crate::engine_supervisor::{
@@ -12,6 +12,7 @@ use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::ModelManager;
 use crate::settings::{
     get_settings, AppSettings, ChineseScript, ModelUnloadTimeout, TranscribeAcceleratorSetting,
+    WordReplacement,
 };
 use anyhow::Result;
 use chunked::ChunkedDecode;
@@ -885,8 +886,8 @@ impl TranscriptionManager {
 
     /// Transcribe a whole clip in batch: a re-transcribed history entry, or
     /// a file from the CLI.
-    pub fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
-        self.complete(Instant::now(), audio, None)
+    pub fn transcribe(&self, audio: Vec<f32>, dictionary: DictionarySelection) -> Result<String> {
+        self.complete(Instant::now(), audio, None, dictionary)
     }
 
     /// Transcribe a finished recording: what its live decode produced, or a
@@ -894,7 +895,7 @@ impl TranscriptionManager {
     pub fn transcribe_recording(&self, samples: Vec<f32>) -> Result<String> {
         let started = Instant::now();
         let live = self.finalize_live(samples.len())?;
-        self.complete(started, samples, live)
+        self.complete(started, samples, live, DictionarySelection::Global)
     }
 
     /// The final text of one transcription, from its live result or else a
@@ -904,6 +905,7 @@ impl TranscriptionManager {
         started: Instant,
         audio: Vec<f32>,
         live: Option<RunOutcome>,
+        dictionary: DictionarySelection,
     ) -> Result<String> {
         #[cfg(debug_assertions)]
         if std::env::var("HANDY_FORCE_TRANSCRIPTION_FAILURE").is_ok() {
@@ -925,7 +927,7 @@ impl TranscriptionManager {
             None => self.decode_batch(audio)?,
         };
         let settings = get_settings(&self.app_handle);
-        let final_result = finish_text(outcome, &settings);
+        let final_result = finish_text(outcome, &settings, &dictionary);
 
         let translation_note = if settings.translate_to_english {
             " (translated)"
@@ -1089,9 +1091,49 @@ struct RunOutcome {
     model_detected_language: Option<String>,
 }
 
+/// Which replacement dictionary a transcription applies. Live dictation
+/// always uses `Global`; file import and the headless CLI may override it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DictionarySelection {
+    /// Whatever `AppSettings::active_dictionary_id` says.
+    Global,
+    /// Apply no replacements at all.
+    None,
+    /// This dictionary id, regardless of the global choice.
+    Dictionary(String),
+}
+
+impl DictionarySelection {
+    pub fn replacements<'a>(&self, settings: &'a AppSettings) -> &'a [WordReplacement] {
+        match self {
+            DictionarySelection::Global => settings.active_replacements(),
+            DictionarySelection::None => &[],
+            DictionarySelection::Dictionary(id) => settings
+                .dictionary_by_id(id)
+                .map(|d| d.entries.as_slice())
+                .unwrap_or(&[]),
+        }
+    }
+
+    /// Name of the dictionary that will be applied, if any.
+    pub fn name(&self, settings: &AppSettings) -> Option<String> {
+        match self {
+            DictionarySelection::Global => settings.active_dictionary().map(|d| d.name.clone()),
+            DictionarySelection::None => None,
+            DictionarySelection::Dictionary(id) => {
+                settings.dictionary_by_id(id).map(|d| d.name.clone())
+            }
+        }
+    }
+}
+
 /// One transcription's final text: its output language resolved, then
 /// post-processed.
-fn finish_text(outcome: RunOutcome, settings: &AppSettings) -> String {
+fn finish_text(
+    outcome: RunOutcome,
+    settings: &AppSettings,
+    dictionary: &DictionarySelection,
+) -> String {
     let RunOutcome {
         setup,
         text,
@@ -1106,6 +1148,7 @@ fn finish_text(outcome: RunOutcome, settings: &AppSettings) -> String {
         setup.custom_words_prompted(),
         &output_language,
         &setup.languages,
+        dictionary,
     )
 }
 
@@ -1465,6 +1508,7 @@ fn post_process_transcription_text(
     custom_words_already_prompted: bool,
     output_language: &OutputLanguageEvidence,
     supported_languages: &[String],
+    dictionary: &DictionarySelection,
 ) -> String {
     let converts_script = settings.chinese_script != ChineseScript::AsTranscribed;
     fail_open_text_transform(raw, |raw| {
@@ -1515,7 +1559,7 @@ fn post_process_transcription_text(
         // Apply deterministic find-and-replace rules. Unlike fuzzy custom words,
         // these run for every engine (including Whisper) since they are exact
         // substitutions rather than model-prompt hints.
-        let replaced = apply_word_replacements(&corrected, &settings.word_replacements);
+        let replaced = apply_word_replacements(&corrected, dictionary.replacements(settings));
 
         let without_fillers = remove_filler_words(
             &replaced,
@@ -1890,6 +1934,7 @@ mod tests {
                 false,
                 &evidence,
                 &languages(&["zh", "ja", "en"]),
+                &DictionarySelection::Global,
             );
 
             assert_eq!(result, "学校に行きます", "{evidence:?}");
@@ -1909,6 +1954,7 @@ mod tests {
             false,
             &OutputLanguageEvidence::Unknown,
             &languages(&["zh", "en", "ja"]),
+            &DictionarySelection::Global,
         );
 
         assert_eq!(result, "我们今天下午一起去学校图书馆看书，然后再去吃晚饭。");
@@ -1930,6 +1976,7 @@ mod tests {
             false,
             &evidence,
             &supported,
+            &DictionarySelection::Global,
         );
 
         assert_eq!(
@@ -1972,6 +2019,7 @@ mod tests {
             false,
             &evidence,
             &languages(&["en", "pt"]),
+            &DictionarySelection::Global,
         );
 
         assert_eq!(evidence, OutputLanguageEvidence::Unknown);
@@ -1992,6 +2040,7 @@ mod tests {
             false,
             &OutputLanguageEvidence::Unknown,
             &languages(&["en", "pt", "es", "de"]),
+            &DictionarySelection::Global,
         );
 
         assert_eq!(
@@ -2013,6 +2062,7 @@ mod tests {
             false,
             &OutputLanguageEvidence::Unknown,
             &languages(&["en", "pt", "es", "de"]),
+            &DictionarySelection::Global,
         );
 
         assert_eq!(
@@ -2099,6 +2149,7 @@ mod tests {
             false,
             &evidence,
             &supported,
+            &DictionarySelection::Global,
         );
         assert_eq!(result, "eu vi um carro");
     }
@@ -2185,6 +2236,7 @@ mod tests {
             true,
             &evidence,
             &supported,
+            &DictionarySelection::Global,
         );
         assert_eq!(prompted, "i use handy every day");
 
@@ -2195,8 +2247,93 @@ mod tests {
             false,
             &evidence,
             &supported,
+            &DictionarySelection::Global,
         );
         assert_eq!(corrected, "i use Handy every day");
+    }
+
+    fn dictionary_settings() -> AppSettings {
+        use crate::settings::{ReplacementDictionary, WordReplacement};
+        let dict = |id: &str, to: &str| ReplacementDictionary {
+            id: id.to_string(),
+            name: id.to_uppercase(),
+            entries: vec![WordReplacement {
+                from: "bp".to_string(),
+                to: to.to_string(),
+            }],
+        };
+        AppSettings {
+            filler_word_removal_enabled: false,
+            replacement_dictionaries: vec![
+                dict("clin", "blood pressure"),
+                dict("sci", "base pair"),
+            ],
+            active_dictionary_id: Some("clin".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn run_with_selection(selection: DictionarySelection) -> String {
+        post_process_transcription_text(
+            "check bp today".to_string(),
+            &dictionary_settings(),
+            false,
+            &OutputLanguageEvidence::UserSelected("en".to_string()),
+            &languages(&["en"]),
+            &selection,
+        )
+    }
+
+    #[test]
+    fn global_selection_uses_active_dictionary() {
+        assert_eq!(
+            run_with_selection(DictionarySelection::Global),
+            "check blood pressure today"
+        );
+    }
+
+    #[test]
+    fn explicit_selection_overrides_active() {
+        assert_eq!(
+            run_with_selection(DictionarySelection::Dictionary("sci".to_string())),
+            "check base pair today"
+        );
+    }
+
+    #[test]
+    fn none_selection_applies_no_replacements() {
+        assert_eq!(
+            run_with_selection(DictionarySelection::None),
+            "check bp today"
+        );
+    }
+
+    #[test]
+    fn dangling_explicit_id_applies_no_replacements() {
+        assert_eq!(
+            run_with_selection(DictionarySelection::Dictionary("nope".to_string())),
+            "check bp today"
+        );
+    }
+
+    #[test]
+    fn selection_name_resolves_through_settings() {
+        let s = dictionary_settings();
+        assert_eq!(
+            DictionarySelection::Global.name(&s).as_deref(),
+            Some("CLIN")
+        );
+        assert_eq!(DictionarySelection::None.name(&s), None);
+        assert_eq!(
+            DictionarySelection::Dictionary("sci".to_string())
+                .name(&s)
+                .as_deref(),
+            Some("SCI")
+        );
+        assert_eq!(
+            DictionarySelection::Dictionary("nope".to_string()).name(&s),
+            None
+        );
     }
 }
 

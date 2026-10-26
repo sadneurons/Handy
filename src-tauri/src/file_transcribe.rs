@@ -61,7 +61,12 @@ pub fn output_paths(
 }
 
 /// A transcript file: a short labelled header, a blank line, then the text.
-pub fn format_transcript(kind: TranscriptKind, source_name: &str, model: &str, text: &str) -> String {
+pub fn format_transcript(
+    kind: TranscriptKind,
+    source_name: &str,
+    model: &str,
+    text: &str,
+) -> String {
     format!(
         "Handy transcript ({})\nSource: {}\nModel: {}\n\n{}\n",
         kind.label(),
@@ -199,7 +204,11 @@ async fn transcribe_one(
         if !tm2.is_model_loaded() {
             tm2.load_model(&model_id).map_err(|e| e.to_string())?;
         }
-        tm2.transcribe(samples2).map_err(|e| e.to_string())
+        tm2.transcribe(
+            samples2,
+            crate::managers::transcription::DictionarySelection::Global,
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -287,7 +296,10 @@ pub async fn transcribe_files(
                     &app,
                     index,
                     total,
-                    &source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                    &source
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
                     "failed",
                 );
                 results.push(FileTranscriptResult {
@@ -342,7 +354,9 @@ mod tests {
     fn output_paths_fall_back_when_the_source_directory_is_not_writable() {
         let source = Path::new("/media/recorder/REC_FILE/take.wav");
         let fallback = Path::new("/home/me/Documents/Handy Transcripts");
-        let paths = output_paths(source, fallback, |dir| dir != Path::new("/media/recorder/REC_FILE"));
+        let paths = output_paths(source, fallback, |dir| {
+            dir != Path::new("/media/recorder/REC_FILE")
+        });
         assert_eq!(
             paths.raw,
             PathBuf::from("/home/me/Documents/Handy Transcripts/take.raw.txt")
@@ -373,7 +387,11 @@ mod tests {
 
     #[test]
     fn ffmpeg_decodes_any_audio_to_16k_mono_f32() {
-        if std::process::Command::new("ffmpeg").arg("-version").output().is_err() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             eprintln!("ffmpeg not installed; skipping");
             return;
         }
@@ -382,7 +400,19 @@ mod tests {
         let src = dir.join("tone.mp3");
         // 2 s, stereo, 44.1 kHz sine at 440 Hz, as an mp3
         let ok = std::process::Command::new("ffmpeg")
-            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-ac", "2", "-ar", "44100"])
+            .args([
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=2",
+                "-ac",
+                "2",
+                "-ar",
+                "44100",
+            ])
             .arg(&src)
             .status()
             .unwrap()
@@ -392,7 +422,10 @@ mod tests {
         let secs = samples.len() as f64 / 16_000.0;
         assert!((secs - 2.0).abs() < 0.1, "got {secs} s");
         assert!(samples.iter().all(|s| (-1.0..=1.0).contains(s)));
-        assert!(samples.iter().any(|s| s.abs() > 0.02), "decoded audio is silent");
+        assert!(
+            samples.iter().any(|s| s.abs() > 0.02),
+            "decoded audio is silent"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
