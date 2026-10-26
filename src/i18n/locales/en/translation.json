@@ -363,7 +363,20 @@
         "add": "Add",
         "remove": "Remove replacement {{from}} to {{to}}",
         "emptyTarget": "(removed)",
-        "duplicate": "A replacement for \"{{word}}\" already exists"
+        "duplicate": "A replacement for \"{{word}}\" already exists",
+        "activeForDictation": "Active dictionary",
+        "activeDescription": "The replacement dictionary applied to live dictation. Switch it here, from the tray menu, or with handy --dictionary <name>. The recording overlay shows the active one.",
+        "none": "None",
+        "noDictionaries": "No dictionaries yet",
+        "newDictionaryName": "New dictionary name",
+        "addDictionary": "Add dictionary",
+        "rename": "Rename",
+        "delete": "Delete",
+        "deleteConfirm": "Delete the dictionary \"{{name}}\" and all its replacements?",
+        "importCsv": "Import CSV",
+        "exportCsv": "Export CSV",
+        "importedCount_one": "Imported {{count}} replacement",
+        "importedCount_other": "Imported {{count}} replacements"
       },
       "voiceActivityDetection": {
         "title": "Voice Activity Detection",
