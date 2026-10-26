@@ -22,9 +22,10 @@ use tauri::{AppHandle, Emitter, Manager};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::settings::APPLE_INTELLIGENCE_DEFAULT_MODEL_ID;
 use crate::settings::{
-    self, get_settings, AutoSubmitKey, ChineseScript, ClipboardHandling, KeyboardImplementation,
-    LLMPrompt, OverlayPosition, OverlayStyle, PasteMethod, ShortcutActivation, ShortcutBinding,
-    SoundTheme, Theme, TypingTool, VadBackend, WordReplacement, APPLE_INTELLIGENCE_PROVIDER_ID,
+    self, get_settings, AppSettings, AutoSubmitKey, ChineseScript, ClipboardHandling,
+    KeyboardImplementation, LLMPrompt, OverlayPosition, OverlayStyle, PasteMethod,
+    ReplacementDictionary, ShortcutActivation, ShortcutBinding, SoundTheme, Theme, TypingTool,
+    VadBackend, APPLE_INTELLIGENCE_PROVIDER_ID,
 };
 use crate::tray;
 
@@ -886,16 +887,63 @@ pub fn update_custom_words(app: AppHandle, words: Vec<String>) -> Result<(), Str
     Ok(())
 }
 
+/// Replaces the dictionary list and drops the active id if its dictionary
+/// no longer exists, so a deleted dictionary can never stay active.
+fn reconcile_active(settings: &mut AppSettings, dictionaries: Vec<ReplacementDictionary>) {
+    settings.replacement_dictionaries = dictionaries;
+    if settings.active_dictionary().is_none() {
+        settings.active_dictionary_id = None;
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
-pub fn update_word_replacements(
+pub fn update_replacement_dictionaries(
     app: AppHandle,
-    replacements: Vec<WordReplacement>,
+    dictionaries: Vec<ReplacementDictionary>,
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
-    settings.word_replacements = replacements;
+    let was_active = settings.active_dictionary_id.clone();
+    reconcile_active(&mut settings, dictionaries);
+    let now_active = settings.active_dictionary_id.clone();
     settings::write_settings(&app, settings);
+    if was_active != now_active {
+        emit_active_dictionary_changed(&app, now_active);
+    }
+    tray::update_tray_menu(&app);
     Ok(())
+}
+
+/// Sets the active dictionary (or none). Shared by the Tauri command, the
+/// tray submenu and the `--dictionary` CLI flag.
+pub fn set_active_dictionary_id(app: &AppHandle, id: Option<String>) -> Result<(), String> {
+    let mut settings = settings::get_settings(app);
+    if let Some(id) = &id {
+        if settings.dictionary_by_id(id).is_none() {
+            return Err(format!("Dictionary with id '{id}' not found"));
+        }
+    }
+    settings.active_dictionary_id = id.clone();
+    settings::write_settings(app, settings);
+    emit_active_dictionary_changed(app, id);
+    tray::update_tray_menu(app);
+    Ok(())
+}
+
+fn emit_active_dictionary_changed(app: &AppHandle, id: Option<String>) {
+    let _ = app.emit(
+        "settings-changed",
+        serde_json::json!({
+            "setting": "active_dictionary_id",
+            "value": id
+        }),
+    );
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_active_dictionary(app: AppHandle, id: Option<String>) -> Result<(), String> {
+    set_active_dictionary_id(&app, id)
 }
 
 #[tauri::command]
@@ -1510,6 +1558,27 @@ pub async fn get_available_accelerators(
 mod tests {
     use handy_keys::Hotkey;
     use tauri_plugin_global_shortcut::Shortcut;
+
+    #[test]
+    fn deleting_active_dictionary_clears_active_id() {
+        use crate::settings::{get_default_settings, ReplacementDictionary};
+        let d = |id: &str| ReplacementDictionary {
+            id: id.to_string(),
+            name: id.to_string(),
+            entries: vec![],
+        };
+        let mut s = get_default_settings();
+        s.replacement_dictionaries = vec![d("a"), d("b")];
+        s.active_dictionary_id = Some("a".to_string());
+
+        super::reconcile_active(&mut s, vec![d("b")]);
+        assert_eq!(s.active_dictionary_id, None);
+        assert_eq!(s.replacement_dictionaries.len(), 1);
+
+        s.active_dictionary_id = Some("b".to_string());
+        super::reconcile_active(&mut s, vec![d("b"), d("c")]);
+        assert_eq!(s.active_dictionary_id.as_deref(), Some("b"));
+    }
 
     #[test]
     fn compound_shortcut_keys_parse_on_both_backends() {

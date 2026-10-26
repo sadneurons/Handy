@@ -320,9 +320,17 @@ async updateCustomWords(words: string[]) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async updateWordReplacements(replacements: WordReplacement[]) : Promise<Result<null, string>> {
+async updateReplacementDictionaries(dictionaries: ReplacementDictionary[]) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("update_word_replacements", { replacements }) };
+    return { status: "ok", data: await TAURI_INVOKE("update_replacement_dictionaries", { dictionaries }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async setActiveDictionary(id: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_active_dictionary", { id }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -886,6 +894,10 @@ async unloadModelManually() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Transcribe each file in turn. Per-file failures are reported in the result
+ * rather than aborting the batch.
+ */
 async transcribeFiles(paths: string[], postProcess: boolean) : Promise<Result<FileTranscriptResult[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("transcribe_files", { paths, postProcess }) };
@@ -894,6 +906,9 @@ async transcribeFiles(paths: string[], postProcess: boolean) : Promise<Result<Fi
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Open the folder that holds a saved transcript in the system file manager.
+ */
 async openTranscriptFolder(path: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_transcript_folder", { path }) };
@@ -959,10 +974,8 @@ async updateRecordingRetentionPeriod(period: string) : Promise<Result<null, stri
 }
 },
 /**
- * Checks if the Mac is a laptop by detecting battery presence
- * 
- * This uses pmset to check for battery information.
- * Returns true if a battery is detected (laptop), false otherwise (desktop)
+ * Stub implementation for non-macOS platforms
+ * Always returns false since laptop detection is macOS-specific
  */
 async isLaptop() : Promise<Result<boolean, string>> {
     try {
@@ -1002,13 +1015,13 @@ streamTextEvent: "stream-text-event"
  * object, so a partial store can never fail the whole load (#1619).
  * Field-level defaults below take precedence where present.
  */
-export type AppSettings = {
+export type AppSettings = { 
 /**
  * Internal settings schema marker for one-time migrations. Fresh installs
  * start at the current version; existing stores missing this key are
  * treated as version 0 and migrated forward.
  */
-settings_schema_version?: number;
+settings_schema_version?: number; 
 /**
  * Defaults to empty on partial stores; the load path merges in the
  * default bindings for any missing keys before the settings are used.
@@ -1035,7 +1048,17 @@ whats_new_last_seen_version?: string; selected_model?: string; onboarding_comple
  * Which input channel to use on the selected microphone device.
  * None means "average all channels" (original behavior).
  */
-selected_channel?: number | null; clamshell_microphone?: string | null; selected_output_device?: string | null; translate_to_english?: boolean; selected_language?: string; overlay_position?: OverlayPosition; debug_mode?: boolean; log_level?: LogLevel; custom_words?: string[]; word_replacements?: WordReplacement[]; model_unload_timeout?: ModelUnloadTimeout; word_correction_threshold?: number; history_limit?: number; recording_retention_period?: RecordingRetentionPeriod; paste_method?: PasteMethod; clipboard_handling?: ClipboardHandling; auto_submit?: boolean; auto_submit_key?: AutoSubmitKey; post_process_enabled?: boolean; post_process_provider_id?: string; post_process_providers?: PostProcessProvider[]; post_process_api_keys?: SecretMap; post_process_models?: Partial<{ [key in string]: string }>; post_process_prompts?: LLMPrompt[]; post_process_selected_prompt_id?: string | null; mute_while_recording?: boolean; append_trailing_space?: boolean; app_language?: string; theme?: Theme; experimental_enabled?: boolean; lazy_stream_close?: boolean; keyboard_implementation?: KeyboardImplementation; show_tray_icon?: boolean; paste_delay_ms?: number; paste_delay_after_ms?: number; 
+selected_channel?: number | null; clamshell_microphone?: string | null; selected_output_device?: string | null; translate_to_english?: boolean; selected_language?: string; overlay_position?: OverlayPosition; debug_mode?: boolean; log_level?: LogLevel; custom_words?: string[]; 
+/**
+ * Legacy flat list. Read once by the migration that turns it into a
+ * "Clinical" dictionary; always written back empty afterwards.
+ * @deprecated use replacement_dictionaries / active_dictionary_id
+ */
+word_replacements?: WordReplacement[]; replacement_dictionaries?: ReplacementDictionary[]; 
+/**
+ * `None` means no replacements are applied.
+ */
+active_dictionary_id?: string | null; model_unload_timeout?: ModelUnloadTimeout; word_correction_threshold?: number; history_limit?: number; recording_retention_period?: RecordingRetentionPeriod; paste_method?: PasteMethod; clipboard_handling?: ClipboardHandling; auto_submit?: boolean; auto_submit_key?: AutoSubmitKey; post_process_enabled?: boolean; post_process_provider_id?: string; post_process_providers?: PostProcessProvider[]; post_process_api_keys?: SecretMap; post_process_models?: Partial<{ [key in string]: string }>; post_process_prompts?: LLMPrompt[]; post_process_selected_prompt_id?: string | null; mute_while_recording?: boolean; append_trailing_space?: boolean; app_language?: string; theme?: Theme; experimental_enabled?: boolean; lazy_stream_close?: boolean; keyboard_implementation?: KeyboardImplementation; show_tray_icon?: boolean; paste_delay_ms?: number; paste_delay_after_ms?: number; 
 /**
  * Debug-gated ("beta") receipt-sequenced paste: restore the clipboard only
  * after the target app actually reads the transcript, instead of after a
@@ -1084,13 +1107,19 @@ export type ChineseScript =
 "as_transcribed" | "simplified" | "traditional"
 export type ClipboardHandling = "dont_modify" | "copy_to_clipboard"
 export type CustomSounds = { start: boolean; stop: boolean }
-export type GpuDeviceOption = { id: string; name: string; total_vram_mb: number }
+/**
+ * Progress of a batch file transcription, one event per stage per file.
+ */
 export type FileTranscribeProgress = { index: number; total: number; file: string; 
 /**
  * "decoding" | "transcribing" | "post_processing" | "saving" | "done" | "failed"
  */
 stage: string }
+/**
+ * Outcome for one dropped file.
+ */
 export type FileTranscriptResult = { source: string; raw_path: string | null; cleaned_path: string | null; used_fallback: boolean; history_id: number | null; error: string | null }
+export type GpuDeviceOption = { id: string; name: string; total_vram_mb: number }
 export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean }
 export type HistoryUpdatePayload = { action: "added"; entry: HistoryEntry } | { action: "updated"; entry: HistoryEntry } | { action: "deleted"; id: number } | { action: "toggled"; id: number }
 /**
@@ -1162,6 +1191,11 @@ export type PostProcessApiFormat =
 "anthropic"
 export type PostProcessProvider = { id: string; label: string; base_url: string; allow_base_url_edit?: boolean; models_endpoint?: string | null; supports_structured_output?: boolean; api_format?: PostProcessApiFormat }
 export type RecordingRetentionPeriod = "never" | "preserve_limit" | "days_3" | "weeks_2" | "months_3"
+/**
+ * A named set of [`WordReplacement`] rules. Exactly one dictionary (or
+ * none) is active at a time; see [`AppSettings::active_dictionary_id`].
+ */
+export type ReplacementDictionary = { id: string; name: string; entries: WordReplacement[] }
 /**
  * A retired ONNX model found on disk.
  */
