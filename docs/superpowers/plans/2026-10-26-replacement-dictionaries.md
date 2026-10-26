@@ -33,10 +33,12 @@
 ### Task 1: Settings data model and migration
 
 **Files:**
+
 - Modify: `src-tauri/src/settings.rs` (struct near line 113, `AppSettings` near 454, defaults near 998, `apply_settings_migrations` near 1165, tests after 1321)
 - Modify: `src-tauri/Cargo.toml` (add `uuid = { version = "1", features = ["v4"] }`)
 
 **Interfaces:**
+
 - Produces:
   ```rust
   #[derive(Serialize, Deserialize, Debug, Clone, Type, PartialEq)]
@@ -87,10 +89,12 @@ fn resolve_dictionary_prefers_id_then_case_insensitive_name() { /* two dicts "Cr
 ### Task 2: Pipeline uses the selected dictionary
 
 **Files:**
+
 - Modify: `src-tauri/src/managers/transcription.rs` (`transcribe` 888, `transcribe_recording` 894, `complete` 902, `finish_text` 1094, `post_process_transcription_text` 1462, line 1518, tests after 1812)
 - Modify callers: `src-tauri/src/file_transcribe.rs:202`, `src-tauri/src/lib.rs:576`, `src-tauri/src/commands/history.rs:87`
 
 **Interfaces:**
+
 - Produces:
   ```rust
   #[derive(Debug, Clone, PartialEq)]
@@ -123,12 +127,14 @@ fn resolve_dictionary_prefers_id_then_case_insensitive_name() { /* two dicts "Cr
 ### Task 3: Commands and store wiring
 
 **Files:**
+
 - Modify: `src-tauri/src/shortcut/mod.rs:889-899` (replace `update_word_replacements`)
 - Modify: `src-tauri/src/lib.rs:692` (command registration)
 - Modify: `src/stores/settingsStore.ts:145` and the `WordReplacement` import at line 12
 - Regenerate: `src/bindings.ts`
 
 **Interfaces:**
+
 - Produces Tauri commands:
   ```rust
   pub fn update_replacement_dictionaries(app: AppHandle, dictionaries: Vec<ReplacementDictionary>) -> Result<(), String>
@@ -149,11 +155,13 @@ fn resolve_dictionary_prefers_id_then_case_insensitive_name() { /* two dicts "Cr
 ### Task 4: Tray dictionary submenu
 
 **Files:**
+
 - Modify: `src-tauri/src/tray.rs` (`MenuInputs` ~line 54-66, snapshot ~316-334, menu build ~533-565, test fixture ~690)
 - Modify: `src-tauri/src/lib.rs` menu handler near line 319
 - Modify: `src/i18n/locales/en/translation.json` `tray` block: `"dictionary": "Dictionary"`, `"dictionaryNone": "None"`
 
 **Interfaces:**
+
 - `MenuInputs` gains `active_dictionary: Option<String>` (id) and `dictionaries: Vec<(String, String)>` (id, name) sorted by name.
 - Menu item ids: `dictionary_select:<id>` and `dictionary_select:none`.
 - Consumes Task 3 `set_active_dictionary` logic (call the same inner function, not the Tauri command).
@@ -167,12 +175,14 @@ fn resolve_dictionary_prefers_id_then_case_insensitive_name() { /* two dicts "Cr
 ### Task 5: `--dictionary` CLI flag
 
 **Files:**
+
 - Modify: `src-tauri/src/cli.rs` (add `#[arg(long, value_name = "NAME_OR_ID")] pub dictionary: Option<String>`)
 - Modify: `src-tauri/src/lib.rs:862-868` (single-instance handler) and headless path ~576
 - Modify: `src-tauri/src/signal_handle.rs` (new helper)
 - Modify: `AGENTS.md` CLI table (one row)
 
 **Interfaces:**
+
 - Produces: `pub fn apply_dictionary_arg(app: &AppHandle, value: &str) -> bool` in `signal_handle.rs` (resolves via `resolve_dictionary`, calls the Task 3 inner setter; returns whether it switched; warns otherwise) and `pub fn dictionary_arg(args: &[String]) -> Option<String>` (parses `--dictionary X` and `--dictionary=X`).
 - Consumes Task 1 `resolve_dictionary`, Task 2 `DictionarySelection`.
 
@@ -185,12 +195,14 @@ fn resolve_dictionary_prefers_id_then_case_insensitive_name() { /* two dicts "Cr
 ### Task 6: File import override and history record
 
 **Files:**
+
 - Modify: `src-tauri/src/file_transcribe.rs` (`transcribe_files` 273, `transcribe_one`, `format_transcript` 64, `save_entry` call 249, tests after 320)
 - Modify: `src-tauri/src/managers/history.rs` (migration list line 31-33, `HistoryEntry` 56, `save_entry` 219, row mapping)
 - Modify: `src-tauri/src/actions.rs:729` and `:807` (`save_entry` calls)
 - Modify: `src-tauri/src/commands/history.rs:87` if it saves entries
 
 **Interfaces:**
+
 - `transcribe_files(app, paths: Vec<String>, post_process: bool, dictionary: FileDictionaryChoice)` where
   ```rust
   #[derive(Serialize, Deserialize, Type)] #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
@@ -209,6 +221,7 @@ fn resolve_dictionary_prefers_id_then_case_insensitive_name() { /* two dicts "Cr
 ### Task 7: Overlay shows the active dictionary
 
 **Files:**
+
 - Modify: `src/overlay/RecordingOverlay.tsx` (around lines 86-100 where `getAppSettings` is already read) and `RecordingOverlay.css`
 
 **Interfaces:** Consumes `AppSettings.replacement_dictionaries` / `active_dictionary_id` from the regenerated bindings.
@@ -221,6 +234,7 @@ fn resolve_dictionary_prefers_id_then_case_insensitive_name() { /* two dicts "Cr
 ### Task 8: Settings panel with dictionaries and CSV
 
 **Files:**
+
 - Rewrite: `src/components/settings/WordReplacements.tsx`
 - Create: `src/lib/dictionaryCsv.ts` with `parseDictionaryCsv(text: string): WordReplacement[]` and `serializeDictionaryCsv(entries: WordReplacement[]): string`
 - Create: `src/lib/dictionaryCsv.test.ts` (check `package.json` for the test runner; if none, use `bun test`)
@@ -239,6 +253,7 @@ fn resolve_dictionary_prefers_id_then_case_insensitive_name() { /* two dicts "Cr
 ### Task 9: Import panel dictionary dropdown
 
 **Files:**
+
 - Modify: `src/components/settings/history/TranscribeFiles.tsx` (state near line 27, call at 44)
 - Modify: `translation.json` under `settings.history.transcribeFiles`: `dictionary`, `dictionaryGlobal` ("Active dictionary"), `dictionaryNone` ("No replacements")
 
