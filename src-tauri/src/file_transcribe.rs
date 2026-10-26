@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::managers::transcription::DictionarySelection;
+
 /// Which transcript a saved file holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranscriptKind {
@@ -25,6 +27,28 @@ impl TranscriptKind {
         match self {
             TranscriptKind::Raw => "raw.txt",
             TranscriptKind::Cleaned => "cleaned.txt",
+        }
+    }
+}
+
+/// Which replacement dictionary an import applies, as chosen in the UI.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+pub enum FileDictionaryChoice {
+    /// The globally active dictionary.
+    Global,
+    /// No replacements.
+    None,
+    /// A specific dictionary id, regardless of the global choice.
+    Dictionary(String),
+}
+
+impl From<FileDictionaryChoice> for DictionarySelection {
+    fn from(choice: FileDictionaryChoice) -> Self {
+        match choice {
+            FileDictionaryChoice::Global => DictionarySelection::Global,
+            FileDictionaryChoice::None => DictionarySelection::None,
+            FileDictionaryChoice::Dictionary(id) => DictionarySelection::Dictionary(id),
         }
     }
 }
@@ -65,13 +89,15 @@ pub fn format_transcript(
     kind: TranscriptKind,
     source_name: &str,
     model: &str,
+    dictionary: Option<&str>,
     text: &str,
 ) -> String {
     format!(
-        "Handy transcript ({})\nSource: {}\nModel: {}\n\n{}\n",
+        "Handy transcript ({})\nSource: {}\nModel: {}\nDictionary: {}\n\n{}\n",
         kind.label(),
         source_name,
         model,
+        dictionary.unwrap_or("none"),
         text.trim_end()
     )
 }
@@ -175,6 +201,7 @@ async fn transcribe_one(
     total: usize,
     source: &Path,
     post_process: bool,
+    dictionary: &DictionarySelection,
 ) -> Result<FileTranscriptResult, String> {
     let name = source
         .file_name()
@@ -195,20 +222,19 @@ async fn transcribe_one(
     emit_progress(app, index, total, &name, "transcribing");
     let settings = get_settings(app);
     let model_id = settings.selected_model.clone();
+    let dictionary_name = dictionary.name(&settings);
     if model_id.is_empty() {
         return Err("no transcription model selected".to_string());
     }
     let tm2 = tm.clone();
     let samples2 = samples.clone();
+    let selection = dictionary.clone();
     let raw = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         if !tm2.is_model_loaded() {
             tm2.load_model(&model_id).map_err(|e| e.to_string())?;
         }
-        tm2.transcribe(
-            samples2,
-            crate::managers::transcription::DictionarySelection::Global,
-        )
-        .map_err(|e| e.to_string())
+        tm2.transcribe(samples2, selection)
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -231,14 +257,26 @@ async fn transcribe_one(
     }
     std::fs::write(
         &paths.raw,
-        format_transcript(TranscriptKind::Raw, &name, &model_name, &raw),
+        format_transcript(
+            TranscriptKind::Raw,
+            &name,
+            &model_name,
+            dictionary_name.as_deref(),
+            &raw,
+        ),
     )
     .map_err(|e| format!("could not write {}: {e}", paths.raw.display()))?;
     let cleaned_path = match &cleaned {
         Some(text) => {
             std::fs::write(
                 &paths.cleaned,
-                format_transcript(TranscriptKind::Cleaned, &name, &model_name, text),
+                format_transcript(
+                    TranscriptKind::Cleaned,
+                    &name,
+                    &model_name,
+                    dictionary_name.as_deref(),
+                    text,
+                ),
             )
             .map_err(|e| format!("could not write {}: {e}", paths.cleaned.display()))?;
             Some(paths.cleaned.to_string_lossy().into_owned())
@@ -255,7 +293,14 @@ async fn transcribe_one(
     let wav_name = format!("import-{}-{}.wav", chrono::Utc::now().timestamp(), stem);
     let history_id = match save_wav_file(history.get_audio_file_path(&wav_name), &samples) {
         Ok(()) => history
-            .save_entry(wav_name, raw.clone(), post_process, cleaned.clone(), None)
+            .save_entry(
+                wav_name,
+                raw.clone(),
+                post_process,
+                cleaned.clone(),
+                None,
+                dictionary_name.clone(),
+            )
             .ok()
             .map(|e| e.id),
         Err(e) => {
@@ -283,12 +328,14 @@ pub async fn transcribe_files(
     app: AppHandle,
     paths: Vec<String>,
     post_process: bool,
+    dictionary: FileDictionaryChoice,
 ) -> Result<Vec<FileTranscriptResult>, String> {
+    let dictionary: DictionarySelection = dictionary.into();
     let total = paths.len();
     let mut results = Vec::with_capacity(total);
     for (index, p) in paths.iter().enumerate() {
         let source = PathBuf::from(p);
-        match transcribe_one(&app, index, total, &source, post_process).await {
+        match transcribe_one(&app, index, total, &source, post_process, &dictionary).await {
             Ok(r) => results.push(r),
             Err(e) => {
                 log::error!("file import failed for {p}: {e}");
@@ -370,6 +417,7 @@ mod tests {
             TranscriptKind::Raw,
             "230114_1733.mp3",
             "whisper-large-v3-turbo",
+            None,
             "Hello world.",
         );
         let header = text.lines().next().unwrap();
@@ -380,8 +428,20 @@ mod tests {
     }
 
     #[test]
+    fn format_transcript_names_dictionary() {
+        let text = format_transcript(TranscriptKind::Raw, "a.mp3", "m", Some("Science"), "x");
+        assert!(text.contains("Dictionary: Science\n"), "{text}");
+    }
+
+    #[test]
+    fn format_transcript_says_none_without_dictionary() {
+        let text = format_transcript(TranscriptKind::Raw, "a.mp3", "m", None, "x");
+        assert!(text.contains("Dictionary: none\n"), "{text}");
+    }
+
+    #[test]
     fn cleaned_transcript_header_says_cleaned() {
-        let text = format_transcript(TranscriptKind::Cleaned, "a.mp3", "m", "x");
+        let text = format_transcript(TranscriptKind::Cleaned, "a.mp3", "m", None, "x");
         assert!(text.lines().next().unwrap().contains("CLEANED"));
     }
 

@@ -41,7 +41,9 @@ export const TranscribeFiles: React.FC = () => {
     setResults([]);
     setProgress({ index: 0, total: audio.length, file: audio[0], stage: "decoding" });
     try {
-      const res = await commands.transcribeFiles(audio, postProcess);
+      const res = await commands.transcribeFiles(audio, postProcess, {
+        kind: "global",
+      });
       if (res.status === "ok") setResults(res.data);
       else setResults([{ source: audio[0], raw_path: null, cleaned_path: null, used_fallback: false, history_id: null, error: res.error }]);
     } finally {

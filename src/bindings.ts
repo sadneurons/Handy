@@ -898,9 +898,9 @@ async unloadModelManually() : Promise<Result<null, string>> {
  * Transcribe each file in turn. Per-file failures are reported in the result
  * rather than aborting the batch.
  */
-async transcribeFiles(paths: string[], postProcess: boolean) : Promise<Result<FileTranscriptResult[], string>> {
+async transcribeFiles(paths: string[], postProcess: boolean, dictionary: FileDictionaryChoice) : Promise<Result<FileTranscriptResult[], string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("transcribe_files", { paths, postProcess }) };
+    return { status: "ok", data: await TAURI_INVOKE("transcribe_files", { paths, postProcess, dictionary }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1108,6 +1108,22 @@ export type ChineseScript =
 export type ClipboardHandling = "dont_modify" | "copy_to_clipboard"
 export type CustomSounds = { start: boolean; stop: boolean }
 /**
+ * Which replacement dictionary an import applies, as chosen in the UI.
+ */
+export type FileDictionaryChoice = 
+/**
+ * The globally active dictionary.
+ */
+{ kind: "global" } | 
+/**
+ * No replacements.
+ */
+{ kind: "none" } | 
+/**
+ * A specific dictionary id, regardless of the global choice.
+ */
+{ kind: "dictionary"; id: string }
+/**
  * Progress of a batch file transcription, one event per stage per file.
  */
 export type FileTranscribeProgress = { index: number; total: number; file: string; 
@@ -1120,7 +1136,11 @@ stage: string }
  */
 export type FileTranscriptResult = { source: string; raw_path: string | null; cleaned_path: string | null; used_fallback: boolean; history_id: number | null; error: string | null }
 export type GpuDeviceOption = { id: string; name: string; total_vram_mb: number }
-export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean }
+export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean; 
+/**
+ * Name of the replacement dictionary applied, if any.
+ */
+dictionary_name: string | null }
 export type HistoryUpdatePayload = { action: "added"; entry: HistoryEntry } | { action: "updated"; entry: HistoryEntry } | { action: "deleted"; id: number } | { action: "toggled"; id: number }
 /**
  * Result of changing keyboard implementation

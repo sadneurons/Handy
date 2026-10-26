@@ -732,6 +732,9 @@ impl ShortcutAction for TranscribeAction {
                                     post_process,
                                     processed.post_processed_text.clone(),
                                     processed.post_process_prompt.clone(),
+                                    get_settings(&ah)
+                                        .active_dictionary()
+                                        .map(|d| d.name.clone()),
                                 ) {
                                     error!("Failed to save history entry: {}", err);
                                 }
@@ -808,6 +811,7 @@ impl ShortcutAction for TranscribeAction {
                                     file_name,
                                     String::new(),
                                     post_process,
+                                    None,
                                     None,
                                     None,
                                 ) {
