@@ -366,7 +366,16 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   return (
     <div className="px-4 py-2 pb-5 flex flex-col gap-3">
       <div className="flex justify-between items-center">
-        <p className="text-sm font-medium">{formattedDate}</p>
+        <p className="text-sm font-medium">
+          {formattedDate}
+          {entry.dictionary_name && (
+            <span className="ml-2 font-normal text-xs text-mid-gray">
+              {t("settings.history.dictionaryLabel", {
+                name: entry.dictionary_name,
+              })}
+            </span>
+          )}
+        </p>
         <div className="flex items-center">
           <IconButton
             onClick={handleCopyText}

@@ -2,21 +2,19 @@ import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import {
-  commands,
-  events,
-  FileDictionaryChoice,
-  FileTranscriptResult,
-} from "../../../bindings";
+import { commands, events, FileTranscriptResult } from "../../../bindings";
 import { useSettings } from "../../../hooks/useSettings";
+import {
+  IMPORT_GLOBAL,
+  IMPORT_NONE,
+  resolveImportChoice,
+} from "@/lib/importDictionaryChoice";
 import { Button } from "../../ui/Button";
 import { Select } from "../../ui/Select";
 import { ToggleSwitch } from "../../ui/ToggleSwitch";
 
-// Select values for the per-import dictionary choice. Dictionary ids are
-// UUIDs, so these two sentinels cannot collide with one.
-const GLOBAL = "__global__";
-const NONE = "__none__";
+const GLOBAL = IMPORT_GLOBAL;
+const NONE = IMPORT_NONE;
 const CHOICE_KEY = "handy.import.dictionary";
 
 const loadChoice = (): string => {
@@ -25,12 +23,6 @@ const loadChoice = (): string => {
   } catch {
     return GLOBAL;
   }
-};
-
-const toChoice = (value: string): FileDictionaryChoice => {
-  if (value === NONE) return { kind: "none" };
-  if (value === GLOBAL) return { kind: "global" };
-  return { kind: "dictionary", id: value };
 };
 
 const AUDIO_EXTENSIONS = [
@@ -69,6 +61,8 @@ export const TranscribeFiles: React.FC = () => {
   // options through a ref so the listener never goes stale.
   const optionsRef = useRef({ postProcess, dictionaryValue });
   optionsRef.current = { postProcess, dictionaryValue };
+  const dictionariesRef = useRef(dictionaries);
+  dictionariesRef.current = dictionaries;
 
   const chooseDictionary = (value: string | null) => {
     const next = value ?? GLOBAL;
@@ -117,7 +111,14 @@ export const TranscribeFiles: React.FC = () => {
     });
     try {
       const { postProcess: pp, dictionaryValue: dv } = optionsRef.current;
-      const res = await commands.transcribeFiles(audio, pp, toChoice(dv));
+      const res = await commands.transcribeFiles(
+        audio,
+        pp,
+        resolveImportChoice(
+          dv,
+          dictionariesRef.current.map((d) => d.id),
+        ),
+      );
       if (res.status === "ok") setResults(res.data);
       else
         setResults([
